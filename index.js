@@ -222,8 +222,6 @@ function handleSendIntercept(event) {
 }
 
 async function executePossessedSend(text) {
-    const context = getContext();
-
     // Clear textarea
     const textarea = document.getElementById('send_textarea');
     if (textarea) {
@@ -234,25 +232,11 @@ async function executePossessedSend(text) {
     // Post the character message
     await postPossessedMessage(text);
 
-    // Trigger generation — send with empty textarea
-    // In group chats, use /trigger to invoke next character; in solo, use /trigger as well
-    if (context.executeSlashCommandsWithOptions) {
-        try {
-            if (selected_group) {
-                await context.executeSlashCommandsWithOptions('/trigger');
-            } else {
-                await context.executeSlashCommandsWithOptions('/trigger');
-            }
-        } catch (err) {
-            debug('Generation trigger failed, trying fallback:', err);
-            // Fallback: click the send button
-            const sendBtn = document.getElementById('send_but');
-            if (sendBtn) sendBtn.click();
-        }
-    } else {
-        const sendBtn = document.getElementById('send_but');
-        if (sendBtn) sendBtn.click();
-    }
+    // Trigger generation by clicking send_but with now-empty textarea.
+    // Our interceptor returns early when text is empty, so this passes through
+    // to ST's native handler, which generates the next response normally.
+    const sendBtn = document.getElementById('send_but');
+    if (sendBtn) sendBtn.click();
 }
 
 // ─── Continue Interception ───
@@ -394,7 +378,16 @@ function injectGroupRadioButtons() {
         });
 
         wrapper.appendChild(radio);
-        entry.appendChild(wrapper);
+
+        // Insert to the left of the mute button (first button in the controls area)
+        const muteBtn = entry.querySelector(
+            '.group_member_mute, [data-action="mute"], .fa-volume-xmark, .fa-volume-off, .fa-volume-slash, [title="Mute"], [title="Unmute"]',
+        );
+        if (muteBtn) {
+            muteBtn.parentNode.insertBefore(wrapper, muteBtn);
+        } else {
+            entry.appendChild(wrapper);
+        }
     });
 }
 
@@ -672,7 +665,13 @@ function onGenerationStarted() {
 
 function onGenerationEnded() {
     generationGuard = false;
-    debug('Generation ended, guard OFF');
+    debug('Generation ended/stopped, guard OFF');
+    // ST may have re-rendered the group member list during generation, removing our
+    // injected radio buttons. Re-inject them now on any generation end path.
+    if (selected_group && isEnabled()) {
+        injectGroupRadioButtons();
+        syncGroupRadioButtons();
+    }
 }
 
 // ─── Initialization ───
@@ -712,6 +711,9 @@ function init() {
     }
     if (eventTypes.GENERATION_ENDED) {
         eventSource.on(eventTypes.GENERATION_ENDED, onGenerationEnded);
+    }
+    if (eventTypes.GENERATION_STOPPED) {
+        eventSource.on(eventTypes.GENERATION_STOPPED, onGenerationEnded);
     }
 
     // Initial UI sync

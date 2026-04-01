@@ -5,7 +5,7 @@
 .possession_radio_wrapper {
     display: inline-flex;
     align-items: center;
-    margin-left: 4px;
+    margin-right: 4px;
     cursor: pointer;
 }
 
