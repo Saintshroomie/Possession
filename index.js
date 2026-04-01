@@ -299,38 +299,37 @@ async function executePossessedContinue(text) {
 
 // ─── Event Listener Setup ───
 
+/**
+ * Attach interception listeners at the document level in the capture phase.
+ * This is more robust than attaching directly to target elements because:
+ *   1. It survives DOM element re-creation (ST may re-render buttons).
+ *   2. Document-level capture fires before any bubble-phase jQuery delegation
+ *      handlers, ensuring stopImmediatePropagation() actually prevents ST's
+ *      native send/continue logic from executing.
+ */
 function attachSendInterceptors() {
-    const textarea = document.getElementById('send_textarea');
-    const sendBtn = document.getElementById('send_but');
+    // Enter key on #send_textarea — capture at document level
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey) return;
+        const textarea = event.target.closest('#send_textarea');
+        if (!textarea) return;
+        handleSendIntercept(event);
+    }, { capture: true });
+    debug('Attached document-level keydown interceptor for #send_textarea');
 
-    // Enter key on textarea
-    if (textarea) {
-        textarea.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey) {
-                handleSendIntercept(event);
-            }
-        }, { capture: true });
-        debug('Attached keydown interceptor on #send_textarea');
-    }
+    // Click on #send_but — capture at document level
+    document.addEventListener('click', (event) => {
+        if (!event.target.closest('#send_but')) return;
+        handleSendIntercept(event);
+    }, { capture: true });
+    debug('Attached document-level click interceptor for #send_but');
 
-    // Click on send button
-    if (sendBtn) {
-        sendBtn.addEventListener('click', handleSendIntercept, { capture: true });
-        debug('Attached click interceptor on #send_but');
-    }
-
-    // Continue buttons
-    const optionContinue = document.getElementById('option_continue');
-    const mesContinue = document.getElementById('mes_continue');
-
-    if (optionContinue) {
-        optionContinue.addEventListener('click', handleContinueIntercept, { capture: true });
-        debug('Attached click interceptor on #option_continue');
-    }
-    if (mesContinue) {
-        mesContinue.addEventListener('click', handleContinueIntercept, { capture: true });
-        debug('Attached click interceptor on #mes_continue');
-    }
+    // Continue buttons — capture at document level
+    document.addEventListener('click', (event) => {
+        if (!event.target.closest('#option_continue') && !event.target.closest('#mes_continue')) return;
+        handleContinueIntercept(event);
+    }, { capture: true });
+    debug('Attached document-level click interceptor for continue buttons');
 }
 
 // ─── UI: Group Chat Radio Buttons ───
