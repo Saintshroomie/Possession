@@ -2,6 +2,7 @@
 // Allows the user to "possess" a character so typed messages are posted under that character's name.
 
 import { selected_group, is_group_generating, groups } from '../../../group-chats.js';
+import { addOneMessage, Generate } from '../../../../script.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/SlashCommandArgument.js';
@@ -136,70 +137,31 @@ async function postPossessedMessage(text) {
     const char = getPossessedCharacter();
     if (!char || !text) return -1;
 
-    // Build message object modeled after a normal character message
     const message = {
         name: char.name,
         is_user: false,
         is_system: false,
+        send_date: new Date().toLocaleString(),
         mes: text,
         force_avatar: char.avatar ? `/characters/${char.avatar}` : undefined,
-        extra: {
-            possession: true,
-        },
+        extra: { possession: true },
     };
 
-    // If in a group chat, add the original_avatar field that ST uses for group member identification
     if (selected_group) {
         message.original_avatar = char.avatar;
         message.is_name = true;
     }
 
-    // Push to chat array
     context.chat.push(message);
     const messageIndex = context.chat.length - 1;
 
-    // Render the message in the DOM
-    await renderCharacterMessage(messageIndex, message, char);
+    // Render via ST's addOneMessage (imported directly from script.js)
+    await addOneMessage(message, { type: 'normal', insertAt: messageIndex, scroll: true });
 
-    // Persist the chat
     await context.saveChat();
 
     debug('Posted possessed message at index', messageIndex);
     return messageIndex;
-}
-
-/** Render a character message into the chat DOM. */
-async function renderCharacterMessage(index, message, char) {
-    const context = getContext();
-
-    // Use ST's addOneMessage if available (preferred)
-    if (typeof context.addOneMessage === 'function') {
-        await context.addOneMessage(message, { insertAt: index });
-        return;
-    }
-
-    // Fallback: manually create DOM element
-    const chatElement = document.getElementById('chat');
-    if (!chatElement) return;
-
-    const mesDiv = document.createElement('div');
-    mesDiv.classList.add('mes');
-    mesDiv.setAttribute('mesid', String(index));
-    mesDiv.setAttribute('is_user', 'false');
-
-    const formattedText = (typeof context.messageFormatting === 'function')
-        ? context.messageFormatting(message.mes, message.name, false, false, index)
-        : message.mes;
-
-    mesDiv.innerHTML = `
-        <div class="mes_block">
-            <div class="ch_name">${char.name}</div>
-            <div class="mes_text">${formattedText}</div>
-        </div>
-    `;
-
-    chatElement.appendChild(mesDiv);
-    chatElement.scrollTop = chatElement.scrollHeight;
 }
 
 // ─── Send Interception ───
@@ -232,11 +194,8 @@ async function executePossessedSend(text) {
     // Post the character message
     await postPossessedMessage(text);
 
-    // Trigger generation by clicking send_but with now-empty textarea.
-    // Our interceptor returns early when text is empty, so this passes through
-    // to ST's native handler, which generates the next response normally.
-    const sendBtn = document.getElementById('send_but');
-    if (sendBtn) sendBtn.click();
+    // Trigger generation programmatically — no button clicks needed
+    await Generate('normal');
 }
 
 // ─── Continue Interception ───
@@ -258,8 +217,6 @@ function handleContinueIntercept(event) {
 }
 
 async function executePossessedContinue(text) {
-    const context = getContext();
-
     // Clear textarea
     const textarea = document.getElementById('send_textarea');
     if (textarea) {
@@ -270,15 +227,8 @@ async function executePossessedContinue(text) {
     // Post the character message
     await postPossessedMessage(text);
 
-    // Wait for DOM update, then continue
-    await new Promise(resolve => requestAnimationFrame(resolve));
-
-    if (context.executeSlashCommandsWithOptions) {
-        await context.executeSlashCommandsWithOptions('/continue');
-    } else {
-        const continueBtn = document.getElementById('option_continue');
-        if (continueBtn) continueBtn.click();
-    }
+    // Continue from the possessed message programmatically — no button clicks needed
+    await Generate('continue');
 }
 
 // ─── Event Listener Setup ───
