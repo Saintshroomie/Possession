@@ -125,10 +125,12 @@ function setPossession(charName) {
     }
 }
 
-// ─── Message Posting ───
+// ─── Message Posting (for Continue flow) ───
 
 /**
  * Post text as a character message attributed to the possessed character.
+ * Used by the Continue interception flow where we need to add a message
+ * programmatically before triggering /continue.
  * Returns the message index of the new message, or -1 on failure.
  */
 async function postPossessedMessage(text) {
@@ -141,6 +143,7 @@ async function postPossessedMessage(text) {
         name: char.name,
         is_user: false,
         is_system: false,
+        send_date: Date.now(),
         mes: text,
         force_avatar: char.avatar ? `/characters/${char.avatar}` : undefined,
         extra: {
@@ -158,8 +161,10 @@ async function postPossessedMessage(text) {
     context.chat.push(message);
     const messageIndex = context.chat.length - 1;
 
-    // Render the message in the DOM
-    await renderCharacterMessage(messageIndex, message, char);
+    // Render the message in the DOM using ST's addOneMessage
+    if (typeof context.addOneMessage === 'function') {
+        context.addOneMessage(message);
+    }
 
     // Persist the chat
     await context.saveChat();
@@ -168,101 +173,54 @@ async function postPossessedMessage(text) {
     return messageIndex;
 }
 
-/** Render a character message into the chat DOM. */
-async function renderCharacterMessage(index, message, char) {
+// ─── Send Handling (via MESSAGE_SENT event) ───
+
+/**
+ * Called when ST adds a user message to the chat array (before rendering).
+ * If possession is active, we convert the user message to a character message
+ * in-place. Since this runs before addOneMessage(), ST will render it with
+ * the correct character name, avatar, and styling automatically.
+ */
+async function onMessageSent(messageIndex) {
+    if (!isEnabled() || !isPossessed()) return;
+
     const context = getContext();
+    const message = context.chat[messageIndex];
+    if (!message || !message.is_user) return;
 
-    // Use ST's addOneMessage if available (preferred)
-    if (typeof context.addOneMessage === 'function') {
-        await context.addOneMessage(message, { insertAt: index });
-        return;
+    const char = getPossessedCharacter();
+    if (!char) return;
+
+    debug('Converting user message to possessed character message at index', messageIndex);
+
+    // Convert user message to character message in-place
+    message.is_user = false;
+    message.name = char.name;
+    message.force_avatar = char.avatar ? `/characters/${char.avatar}` : undefined;
+    message.extra = { ...(message.extra || {}), possession: true };
+
+    if (selected_group) {
+        message.original_avatar = char.avatar;
+        message.is_name = true;
     }
 
-    // Fallback: manually create DOM element
-    const chatElement = document.getElementById('chat');
-    if (!chatElement) return;
-
-    const mesDiv = document.createElement('div');
-    mesDiv.classList.add('mes');
-    mesDiv.setAttribute('mesid', String(index));
-    mesDiv.setAttribute('is_user', 'false');
-
-    const formattedText = (typeof context.messageFormatting === 'function')
-        ? context.messageFormatting(message.mes, message.name, false, false, index)
-        : message.mes;
-
-    mesDiv.innerHTML = `
-        <div class="mes_block">
-            <div class="ch_name">${char.name}</div>
-            <div class="mes_text">${formattedText}</div>
-        </div>
-    `;
-
-    chatElement.appendChild(mesDiv);
-    chatElement.scrollTop = chatElement.scrollHeight;
-}
-
-// ─── Send Interception ───
-
-function handleSendIntercept(event) {
-    if (!isEnabled() || !isPossessed() || generationGuard) return;
-
-    const textarea = document.getElementById('send_textarea');
-    const text = textarea?.value?.trim();
-    if (!text) return; // No text — let normal send through
-
-    // Stop the native send
-    event.stopImmediatePropagation();
-    event.preventDefault();
-
-    debug('Intercepted Send with text:', text.substring(0, 50) + '...');
-
-    // Execute possessed send asynchronously
-    executePossessedSend(text);
-}
-
-async function executePossessedSend(text) {
-    const context = getContext();
-
-    // Clear textarea
-    const textarea = document.getElementById('send_textarea');
-    if (textarea) {
-        textarea.value = '';
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-
-    // Post the character message
-    await postPossessedMessage(text);
-
-    // Trigger generation — send with empty textarea
-    // In group chats, use /trigger to invoke next character; in solo, use /trigger as well
-    if (context.executeSlashCommandsWithOptions) {
-        try {
-            if (selected_group) {
-                await context.executeSlashCommandsWithOptions('/trigger');
-            } else {
-                await context.executeSlashCommandsWithOptions('/trigger');
-            }
-        } catch (err) {
-            debug('Generation trigger failed, trying fallback:', err);
-            // Fallback: click the send button
-            const sendBtn = document.getElementById('send_but');
-            if (sendBtn) sendBtn.click();
-        }
-    } else {
-        const sendBtn = document.getElementById('send_but');
-        if (sendBtn) sendBtn.click();
-    }
+    debug('Converted message — name:', char.name, 'is_user:', message.is_user);
 }
 
 // ─── Continue Interception ───
 
+/**
+ * Intercept the Continue button when possession is active and the user has
+ * typed text. We need interception here because the Continue flow does not
+ * read the textarea — it just extends the last message. So we must manually
+ * post the possessed message first, then trigger /continue.
+ */
 function handleContinueIntercept(event) {
     if (!isEnabled() || !isPossessed() || generationGuard) return;
 
     const textarea = document.getElementById('send_textarea');
     const text = textarea?.value?.trim();
-    if (!text) return; // No text — let normal continue through (FR-17)
+    if (!text) return; // No text — let normal continue through
 
     // Stop the native continue
     event.stopImmediatePropagation();
@@ -300,31 +258,12 @@ async function executePossessedContinue(text) {
 // ─── Event Listener Setup ───
 
 /**
- * Attach interception listeners at the document level in the capture phase.
- * This is more robust than attaching directly to target elements because:
- *   1. It survives DOM element re-creation (ST may re-render buttons).
- *   2. Document-level capture fires before any bubble-phase jQuery delegation
- *      handlers, ensuring stopImmediatePropagation() actually prevents ST's
- *      native send/continue logic from executing.
+ * Attach interception listener for the Continue button at the document level
+ * in the capture phase. This fires before ST's bubble-phase handlers.
+ * Note: Send/Enter no longer needs interception — it's handled via the
+ * MESSAGE_SENT event instead.
  */
-function attachSendInterceptors() {
-    // Enter key on #send_textarea — capture at document level
-    document.addEventListener('keydown', (event) => {
-        if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey) return;
-        const textarea = event.target.closest('#send_textarea');
-        if (!textarea) return;
-        handleSendIntercept(event);
-    }, { capture: true });
-    debug('Attached document-level keydown interceptor for #send_textarea');
-
-    // Click on #send_but — capture at document level
-    document.addEventListener('click', (event) => {
-        if (!event.target.closest('#send_but')) return;
-        handleSendIntercept(event);
-    }, { capture: true });
-    debug('Attached document-level click interceptor for #send_but');
-
-    // Continue buttons — capture at document level
+function attachContinueInterceptor() {
     document.addEventListener('click', (event) => {
         if (!event.target.closest('#option_continue') && !event.target.closest('#mes_continue')) return;
         handleContinueIntercept(event);
@@ -387,14 +326,21 @@ function injectGroupRadioButtons() {
         radio.addEventListener('click', (event) => {
             event.stopPropagation();
             if (possessedCharName === charName) {
-                setPossession(null); // Toggle off (FR-03)
+                setPossession(null); // Toggle off
             } else {
                 setPossession(charName);
             }
         });
 
         wrapper.appendChild(radio);
-        entry.appendChild(wrapper);
+
+        // Insert at the left side of the button grouping (before the mute button)
+        const iconContainer = entry.querySelector('.group_member_icon');
+        if (iconContainer) {
+            iconContainer.insertBefore(wrapper, iconContainer.firstChild);
+        } else {
+            entry.appendChild(wrapper);
+        }
     });
 }
 
@@ -569,7 +515,7 @@ function registerSlashCommands() {
                     toastr.info(`Currently possessing: ${possessedCharName}`, 'Possession');
                     return possessedCharName;
                 }
-                // In solo chat with no args, toggle possession of the active character (OQ-03)
+                // In solo chat with no args, toggle possession of the active character
                 if (!selected_group) {
                     const context = getContext();
                     const char = context.characters?.[context.characterId];
@@ -672,7 +618,14 @@ function onGenerationStarted() {
 
 function onGenerationEnded() {
     generationGuard = false;
-    debug('Generation ended, guard OFF');
+    syncAllUI();
+    debug('Generation ended, guard OFF, UI synced');
+}
+
+function onGenerationStopped() {
+    generationGuard = false;
+    syncAllUI();
+    debug('Generation stopped, guard OFF, UI synced');
 }
 
 // ─── Initialization ───
@@ -692,8 +645,8 @@ function init() {
     // Inject settings panel
     injectSettingsPanel();
 
-    // Attach send/continue interceptors
-    attachSendInterceptors();
+    // Attach continue interceptor (send is handled via MESSAGE_SENT event)
+    attachContinueInterceptor();
 
     // Subscribe to events
     const { eventSource, eventTypes } = getContext();
@@ -712,6 +665,14 @@ function init() {
     }
     if (eventTypes.GENERATION_ENDED) {
         eventSource.on(eventTypes.GENERATION_ENDED, onGenerationEnded);
+    }
+    if (eventTypes.GENERATION_STOPPED) {
+        eventSource.on(eventTypes.GENERATION_STOPPED, onGenerationStopped);
+    }
+
+    // MESSAGE_SENT: convert user messages to possessed character messages
+    if (eventTypes.MESSAGE_SENT) {
+        eventSource.on(eventTypes.MESSAGE_SENT, onMessageSent);
     }
 
     // Initial UI sync
