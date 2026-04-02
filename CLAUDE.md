@@ -104,7 +104,7 @@ Use `chatMetadata` for per-chat state (checkpoints, counters, flags). This survi
 ```javascript
 // Save settings (persists across all chats)
 context.extensionSettings.myExtension = { ...mySettings };
-context.saveSettings();
+context.saveSettingsDebounced();
 
 // Load on init
 const saved = context.extensionSettings?.myExtension;
