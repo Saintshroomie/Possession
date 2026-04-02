@@ -70,7 +70,7 @@ function loadPossessionState() {
 function saveExtensionSettings() {
     const context = getContext();
     context.extensionSettings[EXTENSION_NAME] = { ...extensionSettings };
-    context.saveSettings();
+    context.saveSettingsDebounced();
 }
 
 function loadExtensionSettings() {
