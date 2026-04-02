@@ -628,6 +628,14 @@ function onGenerationStopped() {
     debug('Generation stopped, guard OFF, UI synced');
 }
 
+function onGroupWrapperFinished() {
+    // printGroupMembers() in group-chats.js empties .rm_group_members and rebuilds
+    // it from scratch after group generation completes, destroying our radio buttons.
+    // This fires after that cleanup, so we re-inject them here.
+    syncAllUI();
+    debug('Group wrapper finished, UI re-synced');
+}
+
 // ─── Initialization ───
 
 function init() {
@@ -668,6 +676,9 @@ function init() {
     }
     if (eventTypes.GENERATION_STOPPED) {
         eventSource.on(eventTypes.GENERATION_STOPPED, onGenerationStopped);
+    }
+    if (eventTypes.GROUP_WRAPPER_FINISHED) {
+        eventSource.on(eventTypes.GROUP_WRAPPER_FINISHED, onGroupWrapperFinished);
     }
 
     // MESSAGE_SENT: convert user messages to possessed character messages
