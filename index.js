@@ -283,7 +283,7 @@ function injectGroupRadioButtons() {
     const context = getContext();
 
     // Find group member entries in the DOM
-    const memberEntries = document.querySelectorAll('.group_member');
+    const memberEntries = document.querySelectorAll('#rm_group_members .group_member');
     memberEntries.forEach(entry => {
         // Avoid duplicates
         if (entry.querySelector('.possession_radio_wrapper')) return;
@@ -303,7 +303,7 @@ function injectGroupRadioButtons() {
 
         if (!charName) {
             // Try to get name from the entry's text content
-            const nameEl = entry.querySelector('.ch_name, .character_name, [title]');
+            const nameEl = entry.querySelector('.ch_name');
             if (nameEl) charName = nameEl.textContent?.trim() || nameEl.getAttribute('title');
         }
 
